@@ -123,10 +123,9 @@ const A = (() => {
     const pk = win.length >= 2 ? win.reduce((a, r) => (r.p > a.p || (r.p === a.p && r.d < a.d)) ? r : a, win[0]) : null;
     const pks = pk ? win.filter(r => r.p === pk.p).sort((a, b) => a.d - b.d) : [];
     const last = rows.reduce((a, r) => r.d > a.d ? r : a, rows[0]);
-    const cut3 = addMonths(nowYm(), -3) * 100 + 1; // 최근 3개월(대략)
-    const rec3 = rows.filter(r => r.d >= cut3);
-    const cut12 = addMonths(nowYm(), -12) * 100 + 1;
-    const rec12 = rows.filter(r => r.d >= cut12);
+    const td = new Date(); const cutD = k => { const x = new Date(td.getFullYear(), td.getMonth() - k, td.getDate()); return x.getFullYear() * 10000 + (x.getMonth() + 1) * 100 + x.getDate(); };
+    const rec3 = rows.filter(r => r.d >= cutD(3));   // 오늘 기준 최근 3개월
+    const rec12 = rows.filter(r => r.d >= cutD(12)); // 오늘 기준 최근 12개월
     return { n: rows.length, first: Math.min(...rows.map(r => r.d)), max: mx, maxs, lo22: lo, lo22b: lob, pk2022: pk, pk2022s: pks, last, rec3, rec3med: rec3.length ? med(rec3.map(r => r.p)) : null, rec12, rec12med: rec12.length ? med(rec12.map(r => r.p)) : null };
   }
   /* 지역 지수: 단지×전용(정수) 고정효과, 2022-01=100, 3개월 이동평균 */
