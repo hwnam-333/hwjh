@@ -73,7 +73,7 @@ const RT = (() => {
   async function monthCached(lawd, ym, opt) {
     const rent = !!(opt && opt.rent); const k = cacheKey(lawd, ym, rent);
     const now = A.nowYm(); const fresh = ym >= A.addMonths(now, -2);
-    const c = await DB.get(k);
+    const c = (opt && opt.force) ? null : await DB.get(k);
     if (c && (!fresh || (Date.now() - c.t) < 86400000)) return c.rows;
     const items = await month(lawd, ym, opt);
     const rows = rent ? items.map(it => toRent(it, lawd)) : items.map(it => toRow(it, lawd));
@@ -114,22 +114,47 @@ const KB = (() => {
     const r = await fetch(u.toString(), { headers: { 'Accept': 'application/json, text/plain, */*' } });
     const j = await r.json();
     if (!j.dataBody) throw new Error('KB 응답 형식 오류');
-    const d = j.dataBody.data; mem[ck] = d; return d;
+    // 대부분 dataBody.data 안에 값이 있고, 방문 수 순위처럼 dataBody 바로 아래에 있는 응답도 있음
+    const d = j.dataBody.data !== undefined ? j.dataBody.data : j.dataBody; mem[ck] = d; return d;
+  }
+  async function fresh(path, params) { // 저장하지 않고 매번 새로 받기(방문 수 등)
+    const u = new URL(BASE + path); for (const k in (params || {})) u.searchParams.set(k, params[k]);
+    const r = await fetch(u.toString(), { headers: { 'Accept': 'application/json, text/plain, */*' }, cache: 'no-store' });
+    const j = await r.json();
+    if (!j.dataBody) throw new Error('KB 응답 형식 오류');
+    return j.dataBody.data !== undefined ? j.dataBody.data : j.dataBody;
   }
   async function post(path, body) {
     const r = await fetch(BASE + path, { method: 'POST', headers: { 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json;charset=UTF-8' }, body: JSON.stringify(body) });
-    const j = await r.json(); return j.dataBody && j.dataBody.data;
+    const j = await r.json(); return j.dataBody && (j.dataBody.data !== undefined ? j.dataBody.data : j.dataBody);
   }
-  async function cached(k, fn, ttlMs) {
-    const c = await DB.get('kb_' + k);
+  async function cached(k, fn, ttlMs, force) {
+    const c = force ? null : await DB.get('kb_' + k);
     if (c && (Date.now() - c.t) < (ttlMs || 86400000)) return c.v;
     const v = await fn(); await DB.set('kb_' + k, { t: Date.now(), v }); return v;
   }
+  function row(x) { return { id: +x.COMPLEX_NO, name: x.HSCM_NM, lawd: String(x.BUBCODE || '').slice(0, 5), bub: x.BUBCODE, addr: x.BUBADDR, addrShort: x.BUBADDR_SHORT, dong: String(x.BUBADDR || '').trim().split(/\s+/).pop(), hh: +x.THS_NUM, movein: x.MVIHS_DATE, kind: x.SLND_PERTY_NM, area: x.SQRMSR_SCOP, lat: +x.WGS84_LAT, lng: +x.WGS84_LNG }; }
+  async function searchPage(kw, n, page) {
+    const d = await get('/land-complex/serch/intgraSerch', { '검색설정명': 'SRC_HSCM', '검색키워드': kw, '출력갯수': n, '페이지설정값': page || 1 });
+    const H = (((d || {}).data || {}).HSCM) || {};
+    return { list: (H.data || []).map(row), total: +(H.totcnt || 0) };
+  }
   /* 단지 검색: 국토부 단지명 + 시군구(앞 5자리)로 KB 단지 찾기 */
-  async function search(name, lawd) {
-    const d = await get('/land-complex/serch/intgraSerch', { '검색설정명': 'SRC_HSCM', '검색키워드': name, '출력갯수': 10, '페이지설정값': 1 });
-    const list = (((d || {}).data || {}).HSCM || {}).data || [];
-    return list.map(x => ({ id: +x.COMPLEX_NO, name: x.HSCM_NM, lawd: String(x.BUBCODE || '').slice(0, 5), bub: x.BUBCODE, addr: x.BUBADDR, hh: +x.THS_NUM, movein: x.MVIHS_DATE, kind: x.SLND_PERTY_NM, lat: +x.WGS84_LAT, lng: +x.WGS84_LNG }));
+  async function search(name, lawd) { return (await searchPage(name, 10, 1)).list; }
+  /* 전국 단지 이름 검색(입력 중 추천용) */
+  async function suggest(text, n) { return (await searchPage(text, n || 8, 1)).list.filter(x => /아파트|주상복합/.test(x.kind) && !/분양권/.test(x.kind)); }
+  /* 시·군·구 안의 모든 아파트·주상복합 목록(KB 검색을 지역 이름으로 끝까지 넘겨 받음, 하루 저장) */
+  async function regionList(lawd, regionFullName, onProgress, force) {
+    return cached('rl_' + lawd, async () => {
+      const out = []; let page = 1, total = 0;
+      do {
+        const r = await searchPage(regionFullName, 100, page); total = r.total;
+        for (const x of r.list) if (x.lawd === lawd && /아파트|주상복합/.test(x.kind) && !/분양권/.test(x.kind)) out.push(x);
+        if (onProgress) onProgress(Math.min(page * 100, total), total);
+        page++;
+      } while ((page - 1) * 100 < total && page <= 30);
+      const seen = {}; return out.filter(x => (seen[x.id] ? false : (seen[x.id] = true)));
+    }, 86400000, force);
   }
   function norm(s) { return String(s || '').replace(/[\s\-\.·()（）]/g, '').toLowerCase(); }
   async function match(name, lawd) {
@@ -139,29 +164,31 @@ const KB = (() => {
     let best = same.find(x => norm(x.name) === n) || same.find(x => norm(x.name).includes(n) || n.includes(norm(x.name))) || same[0] || null;
     return { best, list };
   }
-  async function complex(id) {
+  /* 단지 기본 정보(세대수·평형·매물 수). 방문 수(viewCount)는 받은 시각(at)과 함께 둠. 10분 지나면 다시 받음 */
+  async function complex(id, force) {
     return cached('cx_' + id, async () => {
-      const m = await get('/land-complex/complex/main', { '단지기본일련번호': id });
+      const m = await fresh('/land-complex/complex/main', { '단지기본일련번호': id });
       const t = await get('/land-complex/complex/typInfo', { '단지기본일련번호': id });
       const b = await get('/land-complex/complex/brif', { '단지기본일련번호': id });
-      return { id, name: m['단지명'], kind: m['매물종별구분명'], built: m['준공년월일'], hh: m['총세대수'], dongs: m['총동수'], top: m['최고층수'], low: m['최저층수'], park: m['세대당주차대수비율'], heat: m['난방방식구분명'], far: m['용적률내용'], bcr: m['건폐율내용'], maker: m['시공사명'], addr: m['신주소'], hall: m['현관구조'], view: m['viewCount'], rank: m['등수'], fav: b && b['관심등록수'], listings: [m['매매건수'], m['전세건수'], m['월세건수']], reg: (m.regulList || []).map(r => r['규제명']),
+      return { id, at: Date.now(), name: m['단지명'], kind: m['매물종별구분명'], built: m['준공년월일'], hh: m['총세대수'], dongs: m['총동수'], top: m['최고층수'], low: m['최저층수'], park: m['세대당주차대수비율'], heat: m['난방방식구분명'], far: m['용적률내용'], bcr: m['건폐율내용'], maker: m['시공사명'], addr: m['신주소'], hall: m['현관구조'], view: m['viewCount'], rank: m['등수'], dong: m['읍면동명'], bub: m['법정동코드'], fav: b && b['관심등록수'], listings: [m['매매건수'], m['전세건수'], m['월세건수']], reg: (m.regulList || []).map(r => r['규제명']),
         types: (t || []).map(x => ({ aid: +x['면적일련번호'], typ: x['주택형타입내용'] || '', sup: +x['공급면적'], exc: +x['전용면적'], hh: +x['세대수'], room: +x['방수'], bath: +x['욕실수'], lst: [+x['매매건수'], +x['전세건수'], +x['월세건수']] })) };
-    }, 86400000);
+    }, 600000, force);
   }
-  async function price(id, aid) {
+  async function price(id, aid, force) {
     return cached('pr_' + id + '_' + aid, async () => {
       const d = await get('/land-price/price/BasePrcInfoNew', { '단지기본일련번호': id, '면적일련번호': aid });
       const s = (d && d['시세'] && d['시세'][0]) || {}; const lr = (d && d['최근실거래가']) || {};
-      return { base: s['시세기준년월일'], s_lo: s['매매하한가'], s_mid: s['매매일반거래가'], s_hi: s['매매상한가'], j_lo: s['전세하한가'], j_mid: s['전세일반거래가'], j_hi: s['전세상한가'], ask_avg: d['매물매매평균가'], ask_n: d['매매건수'], jask_avg: d['매물전세평균가'], jask_n: d['전세건수'], last: lr['거래금액'], last_fl: lr['거래층'], last_dt: lr['계약년월일'], provided: s['시세제공여부'] === '1' };
-    }, 3600000 * 6);
+      return { at: Date.now(), base: s['시세기준년월일'], s_lo: s['매매하한가'], s_mid: s['매매일반거래가'], s_hi: s['매매상한가'], j_lo: s['전세하한가'], j_mid: s['전세일반거래가'], j_hi: s['전세상한가'], ask_avg: d['매물매매평균가'], ask_n: d['매매건수'], jask_avg: d['매물전세평균가'], jask_n: d['전세건수'], last: lr['거래금액'], last_fl: lr['거래층'], last_dt: lr['계약년월일'], provided: s['시세제공여부'] === '1' };
+    }, 3600000 * 6, force);
   }
-  async function chart(id, aid) {
+  async function chart(id, aid, force) {
     return cached('ch_' + id + '_' + aid, async () => {
       const d = await get('/land-price/price/complex/integrationChart', { '거래구분': 0, '단지기본일련번호': id, '조회구분': 0, '면적일련번호': aid, '면적그룹여부': 1 });
       return { hh: d['세대수'], ask: [d['매물매매최저가'], d['매물매매최고가'], d['매물전세최저가'], d['매물전세최고가']], ser: (d['시세'] || []).map(m => [+m['기준년월'], m['매매일반거래가'], m['전세일반거래가']]) };
-    }, 3600000 * 6);
+    }, 3600000 * 6, force);
   }
-  async function rankings() { return get('/land-complex/count/complexes/rankings/views'); }
-  async function test() { const d = await rankings(); return (d.ranks || []).slice(0, 3).map(r => r.complexName + ' ' + r.viewCount + '명'); }
-  return { search, match, complex, price, chart, rankings, test, post };
+  /* 전국 방문 수 순위(KB 집계) */
+  async function rankings() { const d = await fresh('/land-complex/count/complexes/rankings/views'); return (d && d.ranks) || []; }
+  async function test() { const rk = await rankings(); return rk.slice(0, 3).map(r => r.complexName + ' ' + Number(r.viewCount).toLocaleString() + '명'); }
+  return { search, suggest, regionList, match, complex, price, chart, rankings, test, post, norm };
 })();

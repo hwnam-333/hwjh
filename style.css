@@ -2,7 +2,7 @@
   --ink: #1B2A41; --ink2: #4B5A6E; --mute: #7A8797;
   --paper: #FFFFFF; --surface: #F2F5F9; --line: #D9E0E8; --line2: #EDF1F5;
   --up: #C23A2F; --down: #2457A8;
-  --boss: #F2C94C; --boss2: #FFF4CC; --mine: #FFE08A; --mine2: #FFF8E0;
+  --boss: #F2C94C; --boss2: #FFF4CC; --pick: #B9C4D4; --pick2: #F6F8FB;
   --r0: #2F6DB5; --r0b: #E3EDF8; --r1: #3C8C5A; --r1b: #E4F2E9; --r2: #8E5BB0; --r2b: #F0E8F6; --r3: #C97A1D; --r3b: #FBEEDC;
   --focus: #1B2A41;
   font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
@@ -50,6 +50,19 @@ h2 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
 @media (min-width: 900px) {
   .picker { grid-template-columns: 150px 190px 1fr auto; align-items: end; }
 }
+/* 단지 이름 추천 목록 */
+.sugwrap { position: relative; }
+.sug { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(27,42,65,.12); margin-top: 4px; max-height: 60vh; overflow-y: auto; }
+.sug .sh { padding: 6px 12px 2px; font-size: 11.5px; color: var(--mute); font-weight: 600; }
+.sug .si { display: block; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-top: 1px solid var(--line2); background: #fff; cursor: pointer; line-height: 1.35; }
+.sug .si:hover, .sug .si.on { background: var(--surface); }
+.sug .si b { font-weight: 600; }
+.sug .si small { display: block; color: var(--ink2); font-size: 12px; }
+.sug .se { padding: 10px 12px; font-size: 12.5px; color: var(--ink2); }
+.kbview { display: inline-block; margin-top: 6px; padding: 3px 8px; border-radius: 6px; background: var(--surface); font-size: 12.5px; color: var(--ink); }
+.kbview b { font-size: 14px; }
+.kbview small { color: var(--mute); margin-left: 4px; }
+#refreshInfo { margin-top: -6px; }
 .loadbar { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 13px; color: var(--ink2); }
 .loadbar .bar { flex: 1; height: 6px; background: var(--line2); border-radius: 3px; overflow: hidden; }
 .loadbar .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .2s; }
@@ -67,9 +80,9 @@ h2 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
 @media (min-width: 700px) { .cols { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); } }
 .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #fff; position: relative; }
 .card.boss { background: var(--boss2); border-color: var(--boss); }
-.card.mine { background: var(--mine2); border-color: var(--mine); }
 .card .role { font-size: 12px; font-weight: 700; color: var(--ink2); }
 .card.boss .role { color: #8A6A00; }
+.card.pick { border-color: var(--pick); }
 .card .name { font-size: 16px; font-weight: 700; margin: 2px 0; line-height: 1.3; }
 .card .meta { font-size: 12.5px; color: var(--ink2); }
 .card .x { position: absolute; top: 8px; right: 8px; border: 0; background: none; color: var(--mute); font-size: 16px; cursor: pointer; padding: 2px 6px; }
@@ -93,7 +106,7 @@ h2 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
 .cmp td.up, .up { color: var(--up); }
 .cmp td.down, .down { color: var(--down); }
 .cmp th.boss { background: var(--boss2); }
-.cmp th.mine { background: var(--mine2); }
+.cmp th.pick { background: var(--pick2); }
 .cmp td.na { color: var(--mute); }
 .cmp tbody tr:hover td { background: #FAFBFD; }
 .cmp tbody tr:hover td:first-child { background: #FAFBFD; }

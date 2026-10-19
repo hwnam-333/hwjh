@@ -1,6 +1,6 @@
 {
-  "name": "아파트 대장 비교",
-  "short_name": "대장 비교",
+  "name": "형제부부의 부동산",
+  "short_name": "형제부부 부동산",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#FFFFFF",
