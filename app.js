@@ -103,7 +103,7 @@ async function onSaveKey() {
   try {
     const r = await RT.test('41465');
     out.className = 'result ok';
-    out.textContent = '연결됐습니다. 용인시 수지구 ' + A.ymk(A.addMonths(A.nowYm(), -1)) + ' 신고 ' + r.total + '건.\n' + r.sample.map(x => x.nm + ' 전용 ' + x.a + '㎡ ' + A.won(x.p) + ' (' + x.f + '층, ' + x.d + ')').join('\n') + '\n\n이제 비교 탭에서 어느 시·군·구를 골라도 최근 24개월 실거래가 들어옵니다.';
+    out.textContent = '연결됐습니다 (공공데이터포털 "' + RT.serviceName() + '" 서비스). 용인시 수지구 ' + A.ymk(A.addMonths(A.nowYm(), -1)) + ' 신고 ' + r.total + '건.\n' + r.sample.map(x => x.nm + ' 전용 ' + x.a + '㎡ ' + A.won(x.p) + ' (' + x.f + '층, ' + x.d + ')').join('\n') + '\n\n이제 비교 탭에서 어느 시·군·구를 골라도 최근 24개월 실거래가 들어옵니다.';
     await checkKey();
     await selectRegion(S.lawd, true);
     renderAll();
@@ -111,7 +111,9 @@ async function onSaveKey() {
     out.className = 'result bad';
     let msg = e.message;
     if (/연결 실패/.test(msg)) msg += '\n브라우저에서 국토교통부 서버를 직접 부르지 못했습니다(차단 또는 네트워크). 키가 맞다면 PC에서 받아 두는 방식으로 바꿔야 합니다.';
-    if (/SERVICE_KEY_IS_NULL|NOT_REGISTERED/.test(msg)) msg += '\n키가 비었거나 아직 등록되지 않은 키입니다. 공공데이터포털 마이페이지의 "일반 인증키(Decoding)"를 그대로 붙여 넣으세요. 활용신청 직후라면 몇 분 뒤 다시 시도하세요.';
+    if (/SERVICE_KEY_IS_NULL/.test(msg)) msg += '\n키가 비어 있습니다. 공공데이터포털 마이페이지 → 개발계정 상세의 "일반 인증키"를 그대로 붙여 넣으세요.';
+    else if (/NOT_REGISTERED|ACCESS_DENIED|UNREGISTERED|접근거부|등록되지 않은/i.test(msg)) msg += '\n이 키로 "아파트 매매 실거래가 자료"(기본)와 "…상세 자료" 두 서비스를 모두 불러 봤지만 등록된 서비스가 아니라고 합니다. 공공데이터포털에서 "국토교통부_아파트 매매 실거래가 자료" 활용신청이 승인(처리상태 "승인")됐는지, 붙여 넣은 키에 빠진 글자가 없는지 확인하세요. 활용신청 직후라면 몇 분 뒤 다시 시도하세요.';
+    else if (/LIMITED_NUMBER/.test(msg)) msg += '\n오늘 호출 한도(개발계정 하루 10,000건)를 넘었습니다. 내일 다시 받거나, 공공데이터포털에서 운영계정으로 전환 신청하세요.';
     out.textContent = msg;
     await checkKey();
   }

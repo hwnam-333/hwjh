@@ -21,10 +21,15 @@ const DB = (() => {
 
 const RT = (() => {
   const BASE = 'https://apis.data.go.kr/1613000';
-  const PATH_TRADE = '/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev';
+  /* 매매: 공공데이터포털의 '아파트 매매 실거래가 자료'(기본)와 '…상세 자료'(Dev) 중 활용신청한 쪽을 자동으로 씀 */
+  const PATHS_TRADE = ['/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade', '/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev'];
   const PATH_RENT = '/RTMSDataSvcAptRent/getRTMSDataSvcAptRent';
   function key() { try { return localStorage.getItem('rt_key') || ''; } catch (e) { return ''; } }
-  function setKey(k) { try { localStorage.setItem('rt_key', (k || '').trim()); } catch (e) { } }
+  function setKey(k) { try { localStorage.setItem('rt_key', (k || '').trim()); localStorage.removeItem('rt_path'); } catch (e) { } }
+  function tradePath() { try { const p = localStorage.getItem('rt_path'); return PATHS_TRADE.includes(p) ? p : PATHS_TRADE[0]; } catch (e) { return PATHS_TRADE[0]; } }
+  function setTradePath(p) { try { localStorage.setItem('rt_path', p); } catch (e) { } }
+  /* 키는 있는데 이 서비스에 등록되지 않은 경우(접근거부 20, 미등록 30) — 빈 키(SERVICE_KEY_IS_NULL)는 제외 */
+  function notRegistered(e) { if (!e) return false; if (/IS_NULL/i.test(String(e.err || e.message))) return false; return e.code === '20' || e.code === '30' || /NOT_REGISTERED|ACCESS_DENIED|UNREGISTERED|등록되지 않은|접근거부/i.test(String(e.message)); }
   function text(el, tag) { const x = el.getElementsByTagName(tag)[0]; return x ? x.textContent.trim() : ''; }
   function num(s) { const n = parseInt(String(s).replace(/[^0-9-]/g, ''), 10); return isNaN(n) ? null : n; }
   function parse(txt) {
@@ -37,7 +42,7 @@ const RT = (() => {
     }
     const doc = new DOMParser().parseFromString(t, 'text/xml');
     const auth = doc.getElementsByTagName('returnAuthMsg')[0];
-    if (auth) throw new Error('인증 오류: ' + auth.textContent.trim() + ' (' + text(doc, 'returnReasonCode') + ')');
+    if (auth) { const err = text(doc, 'errMsg'), code = text(doc, 'returnReasonCode'); const e = new Error('인증 오류: ' + (err ? err + ' — ' : '') + auth.textContent.trim() + ' (' + code + ')'); e.code = code; e.err = err; throw e; }
     const rc = text(doc, 'resultCode');
     if (rc && rc !== '000' && rc !== '00') throw new Error('API 오류: ' + text(doc, 'resultMsg'));
     const items = Array.from(doc.getElementsByTagName('item')).map(it => { const o = {}; for (const c of it.children) o[c.tagName] = c.textContent.trim(); return o; });
@@ -60,12 +65,23 @@ const RT = (() => {
     }
     throw new Error('연결 실패: ' + (lastErr && lastErr.message));
   }
+  /* 매매 호출: 지금 쓰는 경로가 '등록되지 않은 서비스'라고 하면 다른 경로로 한 번 더 */
+  async function callTrade(params, tries) {
+    const p = tradePath();
+    try { return await call(p, params, tries); }
+    catch (e) {
+      if (!notRegistered(e)) throw e;
+      const other = PATHS_TRADE.find(x => x !== p);
+      const r = await call(other, params, tries); setTradePath(other); return r;
+    }
+  }
   async function month(lawd, ym, opt) {
-    const path = (opt && opt.rent) ? PATH_RENT : PATH_TRADE;
-    const first = await call(path, { LAWD_CD: lawd, DEAL_YMD: ym, pageNo: 1, numOfRows: 1000 });
+    const rent = !!(opt && opt.rent);
+    const call2 = (params) => rent ? call(PATH_RENT, params) : callTrade(params);
+    const first = await call2({ LAWD_CD: lawd, DEAL_YMD: ym, pageNo: 1, numOfRows: 1000 });
     let items = first.items;
     const pages = Math.ceil(first.total / 1000);
-    for (let p = 2; p <= pages; p++) { const r = await call(path, { LAWD_CD: lawd, DEAL_YMD: ym, pageNo: p, numOfRows: 1000 }); items = items.concat(r.items); }
+    for (let p = 2; p <= pages; p++) { const r = await call2({ LAWD_CD: lawd, DEAL_YMD: ym, pageNo: p, numOfRows: 1000 }); items = items.concat(r.items); }
     return items;
   }
   function cacheKey(lawd, ym, rent) { return (rent ? 'rent_' : 'trade_') + lawd + '_' + ym; }
@@ -98,10 +114,11 @@ const RT = (() => {
     return { out, errors };
   }
   async function test(lawd, ym) {
-    const r = await call(PATH_TRADE, { LAWD_CD: lawd || '41465', DEAL_YMD: ym || A.addMonths(A.nowYm(), -1), pageNo: 1, numOfRows: 5 }, 1);
-    return { total: r.total, sample: r.items.slice(0, 5).map(it => toRow(it, lawd || '41465')) };
+    const r = await callTrade({ LAWD_CD: lawd || '41465', DEAL_YMD: ym || A.addMonths(A.nowYm(), -1), pageNo: 1, numOfRows: 5 }, 1);
+    return { total: r.total, sample: r.items.slice(0, 5).map(it => toRow(it, lawd || '41465')), path: tradePath() };
   }
-  return { key, setKey, monthCached, months, test, parse, toRow, cacheKey };
+  function serviceName() { return tradePath() === PATHS_TRADE[0] ? '아파트 매매 실거래가 자료' : '아파트 매매 실거래가 상세 자료'; }
+  return { key, setKey, monthCached, months, test, parse, toRow, cacheKey, serviceName };
 })();
 
 const KB = (() => {
