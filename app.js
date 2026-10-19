@@ -120,8 +120,8 @@ async function onSaveKey() {
 }
 async function cacheInfo() {
   const ks = await DB.keys().then(ks => ks.map(String));
-  const tr = ks.filter(k => k.startsWith('trade_')).length, rl = ks.filter(k => k.startsWith('kb_rl_')).length, kb = ks.filter(k => k.startsWith('kb_') && !k.startsWith('kb_rl_')).length;
-  $('#cacheInfo').textContent = '실거래 ' + tr + '개월분, KB 단지 목록 ' + rl + '개 지역, KB 단지·시세 ' + kb + '건 저장됨';
+  const tr = ks.filter(k => k.startsWith('trade_')).length, rl = ks.filter(k => k.startsWith('kb_rl_')).length, kb = ks.filter(k => k.startsWith('kb_') && !k.startsWith('kb_rl_')).length, hg = ks.filter(k => k.startsWith('hg_')).length;
+  $('#cacheInfo').textContent = '실거래 ' + tr + '개월분, KB 단지 목록 ' + rl + '개 지역, KB 단지·시세 ' + kb + '건, 동일매물 묶음 ' + hg + '개 단지 저장됨';
 }
 
 /* ---------- 지역 자료 ---------- */
@@ -398,7 +398,26 @@ async function enrichKb(col, force) {
     await loadKbPrice(col, force);
   } catch (e) { col.kb = { error: e.message }; }
   renderAll();
+  await enrichHg(col, force);
+  renderAll();
 }
+/* 호갱노노(직방) 동일매물 묶음 건수 — KB 단지 이름·세대수·위치로 같은 단지를 찾아 매물 묶음을 받음 */
+async function enrichHg(col, force) {
+  col.hg = { loading: true };
+  try {
+    let hash = col.hgHash;
+    if (!hash) {
+      const cx = col.kb && col.kb.cx; const info = col.c.kbInfo || {};
+      const hh = cx ? +cx.hh : (col.c.hh || null), lat = cx ? cx.lat : info.lat, lng = cx ? cx.lng : info.lng;
+      let m = await HG.match(cx ? cx.name : col.c.name, col.lawd, hh, lat, lng);
+      if (!m.best && cx && norm(cx.name) !== norm(col.c.name)) m = await HG.match(col.c.name, col.lawd, hh, lat, lng);
+      hash = m.best && m.best.hash; col.hgInfo = m.best || null;
+    }
+    if (!hash) { col.hg = { none: true }; return; }
+    col.hgHash = hash; col.hg = { hash, cat: await HG.catalog(hash, force) };
+  } catch (e) { col.hg = { error: e.message }; }
+}
+function hgGroup(col) { const cat = col.hg && col.hg.cat; if (!cat) return null; return cat.groups[col.g] || { trade: 0, deposit: 0, rent: 0, raw: 0, min: null, max: null }; }
 async function loadKbPrice(col, force) {
   if (!col.kb || !col.kb.cx) return;
   const ts = col.kb.types.filter(t => Math.floor(t.exc) === col.g);
@@ -422,15 +441,18 @@ async function refreshAll() {
       const yms = [A.addMonths(A.nowYm(), -2), A.addMonths(A.nowYm(), -1), A.nowYm()];
       for (const l of regs) { const r = await getRegion(l); await loadMonths(r, yms, regionName(l) + ' 최근 3개월 실거래', { force: true }); nMon += yms.length; ensureBoss(l); }
     }
-    let nKb = 0;
-    for (const col of S.cols) { if (col.kb && col.kb.id) { col.kb.cx = await KB.complex(col.kb.id, true); col.kb.types = col.kb.cx.types; await loadKbPrice(col, true); nKb++; } else if (!col.kb || col.kb.none || col.kb.error) await enrichKb(col, true); }
+    let nKb = 0, nHg = 0;
+    for (const col of S.cols) {
+      if (col.kb && col.kb.id) { col.kb.cx = await KB.complex(col.kb.id, true); col.kb.types = col.kb.cx.types; await loadKbPrice(col, true); nKb++; await enrichHg(col, true); if (col.hg && col.hg.cat) nHg++; }
+      else if (!col.kb || col.kb.none || col.kb.error) { await enrichKb(col, true); if (col.hg && col.hg.cat) nHg++; }
+    }
     S.lastRefresh = Date.now();
-    info.textContent = ymdhm(S.lastRefresh) + ' 기준으로 새로 받았습니다 — ' + (nMon ? '실거래 ' + regs.length + '개 지역 최근 3개월, ' : '실거래는 인증키가 없어 건너뜀, ') + 'KB 방문 수·시세·호가 ' + nKb + '개 단지.';
+    info.textContent = ymdhm(S.lastRefresh) + ' 기준으로 새로 받았습니다 — ' + (nMon ? '실거래 ' + regs.length + '개 지역 최근 3개월, ' : '실거래는 인증키가 없어 건너뜀, ') + 'KB 방문 수·시세·호가 ' + nKb + '개 단지, 동일매물 묶음 ' + nHg + '개 단지.';
   } catch (e) { info.textContent = '새로 받는 중 문제가 있었습니다: ' + e.message; }
   btn.disabled = false; renderAll();
 }
 async function refreshKbOnly() {
-  for (const col of S.cols) { if (col.kb && col.kb.id) { try { col.kb.cx = await KB.complex(col.kb.id, true); } catch (e) { } } }
+  for (const col of S.cols) { if (col.kb && col.kb.id) { try { col.kb.cx = await KB.complex(col.kb.id, true); } catch (e) { } if (col.hgHash) { try { col.hg = { hash: col.hgHash, cat: await HG.catalog(col.hgHash, true) }; } catch (e) { } } } }
   renderAll();
 }
 function colLabel(col) {
@@ -459,7 +481,15 @@ function regionColor(lawd) { const ls = [...new Set(S.cols.map(c => c.lawd))]; r
 function isFull(col) { return !!(col.c.seed || (S.regionsCache[col.lawd] && S.regionsCache[col.lawd].loadedAll)); }
 function kbViewHtml(col, long) {
   const cx = col.kb && col.kb.cx; if (!cx) return '';
-  return 'KB 방문 <b>' + Number(cx.view || 0).toLocaleString() + '</b>명<small>' + hm(cx.at || Date.now()) + ' 기준</small>' + (long ? ' · 관심 ' + Number(cx.fav || 0).toLocaleString() + '명 · 매매 매물 ' + Number(cx.listings[0] || 0).toLocaleString() + '건' : '');
+  return 'KB 방문 <b>' + Number(cx.view || 0).toLocaleString() + '</b>명<small>' + hm(cx.at || Date.now()) + ' 기준</small>' + (long ? ' · 관심 ' + Number(cx.fav || 0).toLocaleString() + '명 · KB 등록 매물 ' + Number(cx.listings[0] || 0).toLocaleString() + '건<small>중복 포함</small>' : '');
+}
+function hgHtml(col) {
+  const h = col.hg; if (!h) return '';
+  if (h.loading) return '<span class="spin"></span> 동일매물 묶음 건수 받는 중';
+  if (h.none) return '동일매물 묶음: 호갱노노에서 같은 단지를 찾지 못했습니다.';
+  if (h.error) return '동일매물 묶음: 호갱노노 응답 없음 (' + esc(h.error) + ')';
+  const c = h.cat; const G = hgGroup(col);
+  return '매물 <b>' + Number(c.trade).toLocaleString() + '</b>건<small>동일매물 묶음 · 매매</small> · 전세 ' + c.deposit + ' · 월세 ' + c.rent + (G && col.g != null ? ' · 이 평형 매매 ' + G.trade + '건' : '') + '<small>등록 ' + Number(c.raw).toLocaleString() + '건을 ' + Number(c.total).toLocaleString() + '집으로 묶음 · 호갱노노 ' + hm(c.at) + ' 기준</small>';
 }
 
 /* ---------- 그리기 ---------- */
@@ -486,6 +516,7 @@ function renderCols() {
     if (col.kb && col.kb.loading) card.appendChild(el('div', { class: 'kbline' }, '<span class="spin"></span> KB부동산에서 세대수·시세·방문 수 받는 중'));
     else if (col.kb && col.kb.cx) { card.appendChild(el('div', { class: 'kbview' }, kbViewHtml(col, true))); if (col.kb.cx.reg && col.kb.cx.reg.length) card.appendChild(el('div', { class: 'kbline' }, esc(col.kb.cx.reg.join(', ')))); }
     else if (col.kb && (col.kb.none || col.kb.error)) card.appendChild(el('div', { class: 'kbline' }, 'KB부동산에서 같은 이름의 단지를 찾지 못했습니다. 실거래 기준으로만 보여 줍니다.'));
+    if (col.hg) card.appendChild(el('div', { class: 'kbview hg' }, hgHtml(col)));
     if (!c.rows.length) card.appendChild(el('div', { class: 'kbline up' }, RT.key() ? '국토교통부 실거래에 이 이름의 거래가 없습니다(최근 24개월 거래 없음 또는 이름이 다름). KB 자료만 보여 줍니다.' : '실거래 자료 없음 — 설정에서 인증키를 넣으면 들어옵니다. 지금은 KB 자료만 보여 줍니다.'));
     if (col.role === 'boss' && col.bossList && col.bossList.length > 1) card.appendChild(el('div', { class: 'kbline' }, '다음 순위: ' + col.bossList.slice(1, 4).map(b => esc(b.c.name) + ' ' + A.won(b.med)).join(', ')));
     if (col.role !== 'boss') card.appendChild(el('button', { class: 'x', title: '비교에서 빼기', onclick: () => removeColumn(col.id) }, '×'));
@@ -507,11 +538,13 @@ function renderCompare() {
   const grp = t => '<tr class="grp"><td colspan="' + (cols.length + 1) + '">' + t + '</td></tr>';
   const row = (label, fn) => '<tr><td>' + label + '</td>' + cols.map((c, i) => fn(c, st[i]) || tdText('')).join('') + '</tr>';
   // 현재 가격(KB)
-  h += grp('현재 (KB부동산, 받은 시각 기준)');
+  h += grp('현재 (KB부동산 · 호갱노노, 받은 시각 기준)');
   h += row('KB 방문 수 (조회수)', c => { const cx = c.kb && c.kb.cx; return cx ? cell(Number(cx.view || 0).toLocaleString() + '명', hm(cx.at || Date.now()) + ' 기준 · 관심 ' + Number(cx.fav || 0).toLocaleString() + '명') : (c.kb && c.kb.loading ? tdText('<span class="spin"></span>') : tdText('')); });
-  h += row('KB 매물 (매매 · 전세 · 월세)', c => { const cx = c.kb && c.kb.cx; return cx ? cell(Number(cx.listings[0] || 0).toLocaleString() + '건', '전세 ' + Number(cx.listings[1] || 0) + '건 · 월세 ' + Number(cx.listings[2] || 0) + '건') : tdText(''); });
+  h += row('매물 — 동일매물 묶음 (호갱노노)', c => { const cat = c.hg && c.hg.cat; const G = hgGroup(c); if (!cat) return tdText(c.hg && c.hg.loading ? '<span class="spin"></span>' : (c.hg && c.hg.none ? '<span class="na">단지 못 찾음</span>' : '')); return cell((G ? G.trade : 0) + '건', '이 평형 매매 · 단지 전체 매매 ' + Number(cat.trade).toLocaleString() + ' · 전세 ' + cat.deposit + ' · 월세 ' + cat.rent + '<br>등록 ' + Number(cat.raw).toLocaleString() + '건 → ' + Number(cat.total).toLocaleString() + '집 · ' + hm(cat.at) + ' 기준'); });
+  h += row('호가 — 동일매물 묶음 최저 ~ 최고 (호갱노노)', c => { const G = hgGroup(c); return G && G.min ? cell(A.won(G.min) + ' ~ ' + A.won(G.max), '이 평형 매매 ' + G.trade + '집') : tdText(c.hg && c.hg.cat ? '이 평형 매매 매물 없음' : ''); });
+  h += row('KB 등록 매물 (중복 포함)', c => { const cx = c.kb && c.kb.cx; return cx ? cell(Number(cx.listings[0] || 0).toLocaleString() + '건', '매매 · 전세 ' + Number(cx.listings[1] || 0) + ' · 월세 ' + Number(cx.listings[2] || 0) + ' · 같은 집을 여러 중개업소가 올린 건이 모두 들어간 수') : tdText(''); });
   h += row('매매 KB시세 (일반가)', c => { const p = c.kb && c.kb.price; return p && p.s_mid ? cell(A.won(p.s_mid), '하위 ' + A.won(p.s_lo) + ' ~ 상위 ' + A.won(p.s_hi) + ' · ' + String(p.base || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3 기준')) : (c.kb && c.kb.loading ? tdText('<span class="spin"></span>') : tdText('')); });
-  h += row('호가 (KB 매물 최저 ~ 최고)', c => { const ch = c.kb && c.kb.chart; return ch && ch.ask[0] ? cell(A.won(ch.ask[0]) + ' ~ ' + A.won(ch.ask[1]), (c.kb.price && c.kb.price.ask_avg ? '평균 ' + A.won(c.kb.price.ask_avg) + ' · ' : '') + '이 평형 매물 ' + (c.kb.askN || 0) + '건') : tdText(ch ? '매물 없음' : ''); });
+  h += row('호가 — KB 등록 매물 최저 ~ 최고', c => { const ch = c.kb && c.kb.chart; return ch && ch.ask[0] ? cell(A.won(ch.ask[0]) + ' ~ ' + A.won(ch.ask[1]), (c.kb.price && c.kb.price.ask_avg ? '평균 ' + A.won(c.kb.price.ask_avg) + ' · ' : '') + '이 평형 KB 등록 ' + (c.kb.askN || 0) + '건(중복 포함)') : tdText(ch ? '매물 없음' : ''); });
   h += row('전세 KB시세 (일반가)', c => { const p = c.kb && c.kb.price; return p && p.j_mid ? cell(A.won(p.j_mid), (c.kb.chart && c.kb.chart.ask[2] ? '전세 매물 ' + A.won(c.kb.chart.ask[2]) + ' ~ ' + A.won(c.kb.chart.ask[3]) + ' · ' : '') + '전세가율 ' + (p.j_mid / p.s_mid * 100).toFixed(1) + '%') : tdText(''); });
   h += row('매매 − 전세 (갭)', c => { const p = c.kb && c.kb.price; return p && p.s_mid && p.j_mid ? cell(A.won(p.s_mid - p.j_mid)) : tdText(''); });
   // 실거래

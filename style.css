@@ -62,6 +62,8 @@ h2 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
 .kbview { display: inline-block; margin-top: 6px; padding: 3px 8px; border-radius: 6px; background: var(--surface); font-size: 12.5px; color: var(--ink); }
 .kbview b { font-size: 14px; }
 .kbview small { color: var(--mute); margin-left: 4px; }
+.kbview.hg { display: block; margin-top: 6px; background: #EEF4FB; }
+.cmp td .sub br { display: block; content: ''; }
 #refreshInfo { margin-top: -6px; }
 .loadbar { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 13px; color: var(--ink2); }
 .loadbar .bar { flex: 1; height: 6px; background: var(--line2); border-radius: 3px; overflow: hidden; }

@@ -187,7 +187,7 @@ const KB = (() => {
       const m = await fresh('/land-complex/complex/main', { '단지기본일련번호': id });
       const t = await get('/land-complex/complex/typInfo', { '단지기본일련번호': id });
       const b = await get('/land-complex/complex/brif', { '단지기본일련번호': id });
-      return { id, at: Date.now(), name: m['단지명'], kind: m['매물종별구분명'], built: m['준공년월일'], hh: m['총세대수'], dongs: m['총동수'], top: m['최고층수'], low: m['최저층수'], park: m['세대당주차대수비율'], heat: m['난방방식구분명'], far: m['용적률내용'], bcr: m['건폐율내용'], maker: m['시공사명'], addr: m['신주소'], hall: m['현관구조'], view: m['viewCount'], rank: m['등수'], dong: m['읍면동명'], bub: m['법정동코드'], fav: b && b['관심등록수'], listings: [m['매매건수'], m['전세건수'], m['월세건수']], reg: (m.regulList || []).map(r => r['규제명']),
+      return { id, at: Date.now(), name: m['단지명'], kind: m['매물종별구분명'], built: m['준공년월일'], hh: m['총세대수'], lat: +m['wgs84위도'] || null, lng: +m['wgs84경도'] || null, dongs: m['총동수'], top: m['최고층수'], low: m['최저층수'], park: m['세대당주차대수비율'], heat: m['난방방식구분명'], far: m['용적률내용'], bcr: m['건폐율내용'], maker: m['시공사명'], addr: m['신주소'], hall: m['현관구조'], view: m['viewCount'], rank: m['등수'], dong: m['읍면동명'], bub: m['법정동코드'], fav: b && b['관심등록수'], listings: [m['매매건수'], m['전세건수'], m['월세건수']], reg: (m.regulList || []).map(r => r['규제명']),
         types: (t || []).map(x => ({ aid: +x['면적일련번호'], typ: x['주택형타입내용'] || '', sup: +x['공급면적'], exc: +x['전용면적'], hh: +x['세대수'], room: +x['방수'], bath: +x['욕실수'], lst: [+x['매매건수'], +x['전세건수'], +x['월세건수']] })) };
     }, 600000, force);
   }
@@ -208,4 +208,53 @@ const KB = (() => {
   async function rankings() { const d = await fresh('/land-complex/count/complexes/rankings/views'); return (d && d.ranks) || []; }
   async function test() { const rk = await rankings(); return rk.slice(0, 3).map(r => r.complexName + ' ' + Number(r.viewCount).toLocaleString() + '명'); }
   return { search, suggest, regionList, match, complex, price, chart, rankings, test, post, norm };
+})();
+
+/* 호갱노노(직방 매물 자료) — 같은 집을 여러 중개업소가 올린 매물을 한 집(호)으로 묶어 주는 '동일매물 묶음' 건수.
+   KB부동산은 로그인 없이는 묶음 건수를 주지 않아(매물 목록 API가 로그인 전용) 묶음 건수는 이쪽을 씀. */
+const HG = (() => {
+  const BASE = 'https://hogangnono.com';
+  const mem = {};
+  async function getJ(u) {
+    if (mem[u]) return mem[u];
+    const r = await fetch(u, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+    if (!r.ok) throw new Error('호갱노노 응답 ' + r.status);
+    const j = await r.json(); mem[u] = j; return j;
+  }
+  async function cached(k, fn, ttlMs, force) {
+    const c = force ? null : await DB.get('hg_' + k);
+    if (c && (Date.now() - c.t) < (ttlMs || 600000)) return c.v;
+    const v = await fn(); await DB.set('hg_' + k, { t: Date.now(), v }); return v;
+  }
+  function norm(s) { return String(s || '').replace(/[\s\-\.·()（）]/g, '').toLowerCase(); }
+  function km(a, b, c, d) { if (!(a && b && c && d)) return null; const R = 6371, x = (c - a) * Math.PI / 180, y = (d - b) * Math.PI / 180; const h = Math.sin(x / 2) ** 2 + Math.cos(a * Math.PI / 180) * Math.cos(c * Math.PI / 180) * Math.sin(y / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+  async function search(name) {
+    const j = await getJ(BASE + '/api/v2/searches/suggestions/new?query=' + encodeURIComponent(name));
+    const list = (((j.data || {}).matched || {}).apt || {}).list || [];
+    return list.map(x => ({ hash: x.id, name: x.name, addr: x.address, road: x.road_address, bub: String(x.region_code || ''), lawd: String(x.region_code || '').slice(0, 5), hh: +x.household || null, lat: +(x.lat || (x.location && x.location.lat)) || null, lng: +(x.lng || (x.location && x.location.lon)) || null, start: x.start_date, kind: x.type_name }));
+  }
+  /* 단지 찾기: 이름이 같고(띄어쓰기 무시) 같은 시·군·구, 세대수·위치가 가까운 것 */
+  async function match(name, lawd, hh, lat, lng) {
+    const list = await search(name); const n = norm(name);
+    const same = list.filter(x => !lawd || x.lawd === lawd);
+    const score = x => (norm(x.name) === n ? 0 : (norm(x.name).includes(n) || n.includes(norm(x.name)) ? 1 : 3)) + (hh && x.hh ? Math.min(2, Math.abs(x.hh - hh) / Math.max(hh, 1) * 4) : 0.5) + (km(lat, lng, x.lat, x.lng) != null ? Math.min(3, km(lat, lng, x.lat, x.lng)) : 0.5);
+    const best = same.slice().sort((a, b) => score(a) - score(b))[0] || null;
+    return { best: best && score(best) < 4 ? best : null, list };
+  }
+  /* 매물 묶음: 한 호(areaHoId)가 한 건, itemCount = 그 집을 올린 중개업소 수 */
+  async function catalog(hash, force) {
+    return cached('cat_' + hash, async () => {
+      let off = 0, total = 0, items = [], per = null;
+      do {
+        const j = await getJ(BASE + '/api/v2/item-catalogs/summaries?aptHash=' + encodeURIComponent(hash) + '&isAptDetail=false&offset=' + off + '&limit=200&_=' + Date.now());
+        const d = j.data || {}; const l = d.itemCatalogSummaries || []; total = +d.itemCatalogTotalCount || 0; per = per || d.itemCatalogCountPerTradeType || {};
+        items = items.concat(l); off += 200; if (!l.length) break;
+      } while (off < total && off < 2000);
+      const TT = { 0: 'trade', 1: 'deposit', 2: 'rent' };
+      const groups = {}; let raw = 0;
+      const rows = items.map(x => { const g = Math.floor(+x.privateArea); const tt = TT[x.tradeType] || 'etc'; const n = +x.itemCount || 1; raw += n; const p = +x.deposit || 0; const G = groups[g] = groups[g] || { trade: 0, deposit: 0, rent: 0, raw: 0, min: null, max: null }; G[tt] = (G[tt] || 0) + 1; G.raw += n; if (tt === 'trade' && p) { G.min = G.min == null ? p : Math.min(G.min, p); G.max = G.max == null ? p : Math.max(G.max, p); } return { g, tt, dong: x.aptDongName, fl: x.floor, p, rent: +x.rent || 0, n, typ: x.danjiRoomType }; });
+      return { at: Date.now(), total, trade: +per.trade || 0, deposit: +per.deposit || 0, rent: +per.rent || 0, raw, groups, rows };
+    }, 600000, force);
+  }
+  return { search, match, catalog };
 })();
